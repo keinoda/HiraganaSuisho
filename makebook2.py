@@ -7,6 +7,7 @@ import threading
 import subprocess
 import json
 import os
+import shlex
 
 #Copyright (c) tayayan
 #Released under the MIT license
@@ -16,7 +17,13 @@ config_path = "config.json"
 
 @dataclass
 class Config:
+    mode: str
     engine: str
+    ssh_host: str
+    ssh_port: str
+    ssh_key: str
+    ssh_options: str
+    engine_encoding: str
     readbook: str
     book_fix: str
     basesfen: str
@@ -33,9 +40,28 @@ class Config:
         else:
             config_dict = {}
 
+        #実行モード
+        if not config_dict.get("mode"):
+            config_dict["mode"] = input("実行モードを入力してね（local:ローカル cloud:SSH経由でクラウド）\n")
+
+        #SSH接続先（cloudモード時のみ必須）
+        if config_dict["mode"] == "cloud" and not config_dict.get("ssh_host"):
+            config_dict["ssh_host"] = input("SSH接続先を入力してね（例：user@1.2.3.4）\n")
+
+        #任意項目のデフォルト
+        config_dict.setdefault("ssh_host", "")
+        config_dict.setdefault("ssh_port", "")
+        config_dict.setdefault("ssh_key", "")
+        config_dict.setdefault("ssh_options", "")
+        if not config_dict.get("engine_encoding"):
+            config_dict["engine_encoding"] = "cp932"
+
         #エンジンパス指定
         if not config_dict.get("engine"):
-            config_dict["engine"] = input("将棋エンジン（やねうら王etc）のパスを入力してね\n")
+            if config_dict["mode"] == "cloud":
+                config_dict["engine"] = input("リモート側のエンジンパスを入力してね（例：/path/to/YaneuraOu）\n")
+            else:
+                config_dict["engine"] = input("将棋エンジン（やねうら王etc）のパスを入力してね\n")
 
         #定跡読み込み
         if config_dict.get("readbook") is None:
@@ -67,6 +93,24 @@ class Config:
         return Config(**config_dict)
 
 config = Config.create()
+
+def launch_engine():
+    if config.mode == "cloud":
+        cmd = ["ssh", "-T"]
+        if config.ssh_port:
+            cmd += ["-p", config.ssh_port]
+        if config.ssh_key:
+            cmd += ["-i", config.ssh_key]
+        if config.ssh_options:
+            cmd += shlex.split(config.ssh_options)
+        cmd.append(config.ssh_host)
+        cmd.append(config.engine)
+        args = cmd
+    else:
+        args = config.engine
+    return subprocess.Popen(args, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE,
+                                  encoding=config.engine_encoding)
 
 class Shogi:
     book = dict()   #定跡データ
@@ -127,10 +171,8 @@ class Shogi:
             shogi.stdin.write(command+"\n")
             shogi.stdin.flush()
 
-        #将棋エンジン（やねうら王）を立ち上げる
-        shogi = subprocess.Popen(config.engine, stdin=subprocess.PIPE,
-                                               stdout=subprocess.PIPE,
-                                               encoding="cp932")
+        #将棋エンジン（やねうら王）を立ち上げる（ローカル or SSH経由）
+        shogi = launch_engine()
 
         #初期オプション指定
         usi("setoption name Threads value 4") #1スレッドが一番効率いいけど、同じ棋譜が生じやすいので4とする

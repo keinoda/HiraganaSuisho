@@ -1,5 +1,11 @@
 {
+"mode": "",
 "engine": "",
+"ssh_host": "",
+"ssh_port": "",
+"ssh_key": "",
+"ssh_options": "",
+"engine_encoding": "",
 "readbook": "",
 "book_fix": "",
 "basesfen": "",
