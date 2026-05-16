@@ -23,6 +23,9 @@ class Config:
     ssh_port: str
     ssh_key: str
     ssh_options: str
+    ssh_multiplex: str
+    ssh_control_path: str
+    ssh_control_persist: str
     engine_encoding: str
     readbook: str
     book_fix: str
@@ -53,6 +56,13 @@ class Config:
         config_dict.setdefault("ssh_port", "")
         config_dict.setdefault("ssh_key", "")
         config_dict.setdefault("ssh_options", "")
+        if not config_dict.get("ssh_multiplex"):
+            #cloudモード時は既定で多重化ON、localでは無効
+            config_dict["ssh_multiplex"] = "true" if config_dict["mode"] == "cloud" else "false"
+        if not config_dict.get("ssh_control_path"):
+            config_dict["ssh_control_path"] = "~/.ssh/cm-hiragana-%r@%h:%p"
+        if not config_dict.get("ssh_control_persist"):
+            config_dict["ssh_control_persist"] = "600"
         if not config_dict.get("engine_encoding"):
             config_dict["engine_encoding"] = "cp932"
 
@@ -94,23 +104,46 @@ class Config:
 
 config = Config.create()
 
+def _ssh_multiplex_enabled():
+    return config.mode == "cloud" and config.ssh_multiplex.lower() == "true"
+
+def _ssh_base_opts():
+    opts = []
+    if config.ssh_port:
+        opts += ["-p", config.ssh_port]
+    if config.ssh_key:
+        opts += ["-i", config.ssh_key]
+    if _ssh_multiplex_enabled():
+        opts += ["-o", "ControlMaster=auto",
+                 "-o", "ControlPath=" + config.ssh_control_path,
+                 "-o", "ControlPersist=" + config.ssh_control_persist]
+    if config.ssh_options:
+        opts += shlex.split(config.ssh_options)
+    return opts
+
+def prime_ssh_master():
+    #多重化を使う場合、最初に1本マスター接続を張っておく（thread起動時の競合回避）
+    if not _ssh_multiplex_enabled():
+        return
+    cmd = ["ssh", "-fN"] + _ssh_base_opts() + [config.ssh_host]
+    try:
+        subprocess.check_call(cmd)
+        print(f"SSH ControlMaster を起動しました: {config.ssh_host}")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"SSH ControlMaster の起動に失敗しました（{e}）。多重化を無効にして続行します。")
+        config.ssh_multiplex = "false"
+
 def launch_engine():
     if config.mode == "cloud":
-        cmd = ["ssh", "-T"]
-        if config.ssh_port:
-            cmd += ["-p", config.ssh_port]
-        if config.ssh_key:
-            cmd += ["-i", config.ssh_key]
-        if config.ssh_options:
-            cmd += shlex.split(config.ssh_options)
-        cmd.append(config.ssh_host)
-        cmd.append(config.engine)
+        cmd = ["ssh", "-T"] + _ssh_base_opts() + [config.ssh_host, config.engine]
         args = cmd
     else:
         args = config.engine
     return subprocess.Popen(args, stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE,
                                   encoding=config.engine_encoding)
+
+prime_ssh_master()
 
 class Shogi:
     book = dict()   #定跡データ
